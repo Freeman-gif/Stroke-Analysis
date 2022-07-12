@@ -1,0 +1,471 @@
+---
+title: "Stat 419 Group Project"
+author: "Molly Behrends, Payton Bokowy, Freeman Chen, Marvin Lim"
+date: "12/15/2021"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+# Introduction 
+
+## Dataset Information
+The dataset for this project was obtained data about strokes from kaggle.com which was collected from the World Health Organization. The dataset contains information about each person's age, heart disease, hypertension, marital status, BMI, and their smoking status to list a few of the variables. 
+
+This dataset was chosen because strokes are the second leading cause of death in the world. It would be helpful to be able to know what features can possibly lead to a stroke, so we are aware and can reduce those factors. 
+
+```{r library, message=F, warning=F, echo=F}
+library(ggplot2)
+library(e1071)
+library(lmtest)
+library(MASS)
+library(class)
+library(pheatmap)
+library(ROSE)
+library(pROC)
+library(ggthemes)
+```
+
+## Reads in the data
+```{r data}
+data = read.csv("healthcare-dataset-stroke-data.csv") # reads data file
+#data = subset(data, select = -c(id)) # gets rid of the id
+
+# changes the predictors to factors
+data$gender = as.factor(data$gender)
+data$hypertension = as.factor(data$hypertension)
+data$heart_disease = as.factor(data$heart_disease)
+data$ever_married = as.factor(data$ever_married)
+data$work_type = as.factor(data$work_type)
+data$Residence_type = as.factor(data$Residence_type)
+data$smoking_status = as.factor(data$smoking_status)
+data$stroke = as.factor(data$stroke)
+data$bmi = as.numeric(data$bmi)
+data = na.omit(data)
+str(data)
+prop.table(table(data$stroke))
+```
+
+## Splits the data into a testing and training set
+```{r split}
+set.seed(1)
+n = dim(data)[1]
+
+dt = sort(sample(n, n*.7))
+training = data[dt,]
+testing = data[-dt,]
+
+```
+
+## Processing Problems
+When the data was loaded in, we noticed the data was highly unbalanced. Only about 5% of the data results in strokes, while the other 95% results in no stroke. This resulted in the models being fitted on unbalanced data. In order to combat this issue, we created synthetic data.
+```{r}
+ggplot(data=data, aes(x=stroke, color = stroke)) + geom_bar(aes(fill= stroke)) + ggtitle("Stroke Class Distribution") + scale_fill_brewer(palette = "Set1")
+```
+From the graph we can see that the response variable are higher unbalance, which will lead to a problem that even model predict every sample as likely non-stroke, it will still likely to have a good accuracy, so in this case we are more looking for the error rates from the model instead just look at the accuracy.
+
+# Synthetic Data
+after research we found that 'rose' library might gave us a better chance to make the dataset look a bit 'balance', rose functions is design to deal with binary classification problems in the presence of imbalanced classes by generating synthetic balanced samples(https://cran.r-project.org/web/packages/ROSE/ROSE.pdf)
+```{r synthetic}
+set.seed(1)
+
+syn_train = ROSE(stroke~.,data=training)$data
+table(syn_train$stroke)
+
+syn_test = ROSE(stroke~.,data=testing)$data
+table(syn_test$stroke)
+
+num_train = syn_train
+num_test = syn_test
+
+num_train$gender = as.numeric(as.factor(num_train$gender))
+num_train$ever_married = as.numeric(as.factor(num_train$ever_married))
+num_train$work_type = as.numeric(as.factor(num_train$work_type))
+num_train$Residence_type = as.numeric(as.factor(num_train$Residence_type))
+num_train$smoking_status = as.numeric(as.factor(num_train$smoking_status))
+
+num_test$gender = as.numeric(as.factor(num_test$gender))
+num_test$ever_married = as.numeric(as.factor(num_test$ever_married))
+num_test$work_type = as.numeric(as.factor(num_test$work_type))
+num_test$Residence_type = as.numeric(as.factor(num_test$Residence_type))
+num_test$smoking_status = as.numeric(as.factor(num_test$smoking_status))
+
+ggplot(data=syn_train, aes(x=stroke, color = stroke)) + geom_bar(aes(fill= stroke)) + ggtitle("Rose data") + scale_fill_brewer(palette = "Set1")
+```
+
+
+## Research Questions
+
+### Will smoking status of an individual increase the chance of having a stroke?
+```{r}
+n = dim(data)[1]
+past_smoked_data = data[data$smoking_status == "formerly smoked", ]
+past_smoked_prob = dim(past_smoked_data[past_smoked_data$stroke == 1, ])[1]/
+  dim(past_smoked_data)[1]
+past_smoked_no_stroke = dim(past_smoked_data[past_smoked_data$stroke == 0, ])[1]/ dim(past_smoked_data)[1]
+
+
+never_smoked_data = data[data$smoking_status == "never smoked", ]
+never_smoked_prob = dim(never_smoked_data[never_smoked_data$stroke == 1, ])[1]/
+  dim(never_smoked_data)[1]
+never_smoked_no_stroke = dim(never_smoked_data[never_smoked_data$stroke == 0, ])[1]/ dim(never_smoked_data)[1]
+
+smokes_data = data[data$smoking_status == "smokes", ]
+smokes_prob = dim(smokes_data[smokes_data$stroke == 1, ])[1]/
+  dim(smokes_data)[1]
+smokes_no_stroke = dim(smokes_data[smokes_data$stroke == 0, ])[1]/
+  dim(smokes_data)[1]
+
+u_smoke_data = data[data$smoking_status == "Unknown", ]
+u_smoke_prob = dim(u_smoke_data[u_smoke_data$stroke == 1, ])[1]/
+  dim(u_smoke_data)[1]
+u_smoke_no_stroke = dim(u_smoke_data[u_smoke_data$stroke == 0, ])[1]/
+  dim(u_smoke_data)[1]
+
+smoking_status = c("formerly smoked", "never smoked", "smokes", "unknown",
+                   "formerly smoked", "never smoked", "smokes", "unknown")
+stroke_status = c("Stroke", "Stroke", "Stroke", "Stroke", "No Stroke", 
+                  "No Stroke", "No Stroke", "No Stroke")
+smoking_prob = c(round(past_smoked_prob, 3), round(never_smoked_prob, 3),
+                 round(smokes_prob, 3), round(u_smoke_prob, 3),
+                 round(past_smoked_no_stroke, 3), 
+                 round(never_smoked_no_stroke, 3), round(smokes_no_stroke, 3),
+                 round(u_smoke_no_stroke, 3))
+
+smoking_data = as.data.frame(cbind(smoking_status, stroke_status,
+                                   smoking_prob))
+
+ggplot(smoking_data, aes(fill=stroke_status, y=smoking_prob,
+                          x=smoking_status)) + 
+  geom_bar(position = position_stack(reverse = TRUE), stat="identity") +
+  xlab("Smoking Status") + ylab("Stroke Probability") + 
+  ggtitle("Stroke Probability Given Smoking Status") +
+  scale_fill_brewer(palette = "Set1")
+```
+
+### What variables best classify if a patient is likely to have a stroke?
+
+## Correlation Visualization
+```{r}
+cor_data = data
+
+cor_data$gender = as.numeric(cor_data$gender)
+cor_data$hypertension = as.numeric(cor_data$hypertension)
+cor_data$heart_disease = as.numeric(cor_data$heart_disease)
+cor_data$ever_married = as.numeric(cor_data$ever_married)
+cor_data$work_type = as.numeric(cor_data$work_type)
+cor_data$Residence_type = as.numeric(cor_data$Residence_type)
+cor_data$smoking_status = as.numeric(cor_data$smoking_status)
+cor_data$stroke = as.numeric(data$stroke)
+cors = cor(cor_data)
+cor_df = data.frame(as.table(cors))
+
+ggplot(data=cor_df, mapping=aes(Var1, Var2))+
+  geom_tile(mapping = aes(fill = Freq)) +
+  scale_fill_gradient2(low = "red3", high = "blue3", mid = "white", 
+   midpoint = 0, limit = c(-1,1)) + ggtitle("Correlation Heatmap") + scale_x_discrete(guide = guide_axis(angle=45))
+```
+
+### Does marriage status affect the likelihood of having a stroke?
+```{r}
+married_data = data[data$ever_married == "Yes", ]
+married_stroke_prob = dim(married_data[married_data$stroke == 1, ])[1]/ dim(married_data)[1]
+married_no_stroke = dim(married_data[married_data$stroke == 0, ])[1]/ dim(married_data)[1]
+
+not_married_data = data[data$ever_married == "No", ]
+not_married_stroke_prob = dim(not_married_data[not_married_data$stroke == 1, ])[1]/ dim(not_married_data)[1]
+not_married_no_stroke = dim(not_married_data[not_married_data$stroke == 0, ])[1]/ dim(not_married_data)[1]
+
+marriage_status = c("Married", "Not Married", "Married", "Not Married")
+stroke_status = c("Stroke", "Stroke", "No Stroke", "No Stroke")
+marriage_prob = c(round(married_stroke_prob, 3), 
+                  round(not_married_stroke_prob, 3), 
+                  round(married_no_stroke, 3), 
+                  round(not_married_no_stroke, 3))
+
+marriage_data = as.data.frame(cbind(marriage_status, stroke_status,
+                                    marriage_prob))
+
+ggplot(marriage_data, aes(fill=stroke_status, y=marriage_prob,
+                          x=marriage_status)) + 
+  geom_bar(position = position_stack(reverse = TRUE), stat="identity") +
+  xlab("Marriage Status") + ylab("Stroke Probability") + 
+  ggtitle("Stroke Probability Given Marriage Status") +
+  scale_fill_brewer(palette = "Set1")
+```
+
+### Do people with heart disease have a higher risk of having a stroke?
+```{r}
+no_heart_data = data[data$heart_disease == 0, ]
+no_heart_prob = dim(no_heart_data[no_heart_data$stroke == 1, ])[1]/ dim(no_heart_data)[1]
+
+no_heart_no_stroke = dim(no_heart_data[no_heart_data$stroke == 0, ])[1]/ dim(no_heart_data)[1]
+
+heart_data = data[data$heart_disease == 1, ]
+heart_stroke_prob = dim(heart_data[heart_data$stroke == 1, ])[1]/ dim(heart_data)[1]
+
+heart_no_stroke_prob = dim(heart_data[heart_data$stroke == 0, ])[1]/ dim(heart_data)[1]
+
+heart_status = c("No Heart Disease", "Heart Disease", "No Heart Disease", "Heart Disease")
+stroke_status = c("Stroke", "Stroke", "No Stroke", "No Stroke")
+
+heart_prob = c(round(no_heart_prob, 3), round(heart_stroke_prob, 3), round(no_heart_no_stroke, 3), round(heart_no_stroke_prob, 3))
+
+heart_data = as.data.frame(cbind(heart_status, stroke_status, heart_prob))
+heart_data
+
+ggplot(heart_data, aes(fill=stroke_status, y=heart_prob, x=heart_status)) + 
+    geom_bar(position = position_stack(reverse = TRUE), stat="identity") + 
+  xlab("Heart Disease History") + ylab("Stroke Probability") + 
+  ggtitle("Stroke Probability Given Heart Disease History") +
+  scale_fill_brewer(palette = "Set1")
+```
+
+### What classification model is best at predicting having stroke class?
+
+## Logistic Regression with Unbalanced Data
+```{r logistic regression, fig.height=4, fig.width=6}
+# performs logistic regression on the stroke data
+full_logistic = glm(stroke~., data = training, family = "binomial")
+summary(full_logistic)
+
+# predicts on the testing data
+probs = predict(full_logistic, type = "response", testing) 
+
+n = dim(testing)[1]
+t = 0.5
+pred.label = c()
+pred.label = rep(1, n)
+pred.label[probs>t] = 0
+
+table(predicted = pred.label, truth = testing$stroke) # confusion matrix
+log1_error = (1406 + 2)/ n
+log1_error
+
+log1_acc = (0+65) /n
+log1_acc
+
+
+# plots the ROC Curve
+
+
+
+
+tseq = seq(0.001, 0.999, length.out = 100)
+sensitivity = c(); specificity = c()
+
+for (j in 1:length(tseq)){
+t = tseq[j]
+
+pred.label[probs>t] = 1
+pred.label[probs < t] = 0
+
+p.ind = which(testing$stroke == 1)
+sensitivity[j] = mean(pred.label[p.ind] == testing$stroke[p.ind])
+
+n.ind = which(testing$stroke == 0)  
+specificity[j] = mean(pred.label[n.ind] == testing$stroke[n.ind])
+}
+
+plot(1 - specificity, sensitivity, type = "l", xlim = c(0, 1), ylim = c(0, 1))
+abline(a = 0, b = 1)
+```
+
+## Logistic Regression with Synthetic Data
+```{r}
+full_logistic = glm(stroke~., data = syn_train, family = "binomial")
+
+probs = predict(full_logistic, type = "response", syn_test)
+n = dim(syn_test)[1]
+t = 0.5
+pred.label = c()
+pred.label = rep(0, n)
+pred.label[probs>t] = 1
+table(predicted = pred.label, truth = syn_test$stroke)
+
+log_TPM = (205 + 165) / n
+log_TPM
+
+log_acc = (562 + 541) / n
+log_acc
+
+# plots the ROC Curve
+tseq = seq(0.001, 0.999, length.out = 100)
+sensitivity = c(); specificity = c()
+
+for (j in 1:length(tseq)){
+t = tseq[j]
+
+pred.label[probs>t] = 1
+pred.label[probs < t] = 0
+
+p.ind = which(syn_test$stroke == 1)
+sensitivity[j] = mean(pred.label[p.ind] == syn_test$stroke[p.ind])
+
+n.ind = which(syn_test$stroke == 0)  
+specificity[j] = mean(pred.label[n.ind] == syn_test$stroke[n.ind])
+}
+
+plot(1 - specificity, sensitivity, type = "l", xlim = c(0, 1), ylim = c(0, 1))
+abline(a = 0, b = 1)
+```
+
+## Linear SVM
+```{r svm}
+# performs linear support vector machine 
+# svm.rad = tune(svm, stroke~., data = syn_train, kernel = "linear", 
+# ranges = list(cost = c(0.1, 1, 10, 1000)))
+
+# svm.best = svm.rad$best.model
+
+# best model: cost = 1
+library(ROCR)
+
+# predicts on the testing set
+svm.fit <- svm(stroke~., data = num_train, kernel = "linear", 
+               cost = 1, gamma = 0.01, degree = 1,probability=TRUE)
+
+pred=predict(svm.fit,num_test[, !names(num_test) %in% c("stroke")], probability=TRUE)
+table(prediction = pred, truth = num_test$stroke)  # confusion matrix
+svm_error = (201 + 181) / dim(num_test)[1]
+svm_error
+
+svm_acc = (565 + 526) / dim(num_test)[1]
+svm_acc
+pred.prob = attr(pred, "probabilities")
+pred.to.roc = pred.prob[, 2]
+
+predct.rocr <- prediction(as.numeric(pred.to.roc), num_test$stroke )
+perf.rocr<-performance(predct.rocr, measure = "auc", x.measure = "cutoff")
+perf.tpr.rocr<-performance(predct.rocr, "tpr","fpr")
+plot(perf.tpr.rocr, colorize=T,main=paste("AUC:",(perf.rocr@y.values)))
+
+```
+
+## Linear Discriminant Analysis
+```{r lda}
+set.seed(123)
+lda.fit = lda(stroke~., data = num_train, probability=TRUE) # performs LDA classification
+
+lda.pred = predict(lda.fit, num_test)  # predicts on the test set
+
+table(prediction = lda.pred$class, truth = num_test$stroke)  # confusion matrix
+
+lda_error = (219 + 165) / dim(syn_test)[1]
+lda_error
+
+lda_acc = (547 + 542) / dim(syn_test)[1]
+lda_acc
+
+
+pred=predict(lda.fit,num_test[, !names(num_test) %in% c("stroke")], probability=TRUE)
+
+pred.prob = pred$posterior
+
+pred.to.roc = pred.prob[, 2]
+
+predct.rocr <- prediction(as.numeric(pred.to.roc), num_test$stroke )
+perf.rocr<-performance(predct.rocr, measure = "auc", x.measure = "cutoff")
+perf.tpr.rocr<-performance(predct.rocr, "tpr","fpr")
+plot(perf.tpr.rocr, colorize=T,main=paste("AUC:",(perf.rocr@y.values)))
+```
+
+
+## KNN
+```{r knn}
+set.seed(1)
+
+knn5 = knn(num_train[, -11], num_test[, -11], syn_train$stroke, k=5)
+table(syn_test$stroke, knn5)
+
+TPM = (171+229) / dim(syn_test)[1]
+TPM
+
+knn5_acc = (538+535) / dim(syn_test)[1]
+knn5_acc
+
+knn10 = knn(num_train[, -11], num_test[, -11], syn_train$stroke, k=10)
+table(syn_test$stroke, knn10)
+
+TPM = (165+239) / dim(syn_test)[1]
+TPM
+
+knn10_acc = (519+543) / dim(syn_test)[1]
+knn10_acc
+
+knn50 = knn(num_train[, -11], num_test[, -11], syn_train$stroke, k=50)
+table(syn_test$stroke, knn50)
+
+TPM = (139+231) / dim(syn_test)[1]
+TPM
+
+knn50_acc = (538+565) / dim(syn_test)[1]
+knn50_acc
+
+
+```
+## PCA&kmean
+```{r PCA}
+
+library(devtools)
+#install_github("vqv/ggbiplot")
+require(tidyverse)
+require(ggbiplot)
+require(ggthemes)
+set.seed(123)
+data <- num_train[, !names(syn_train) %in% c("stroke")]
+str(data)
+data$hypertension <- as.numeric(data$hypertension)
+data$heart_disease <- as.numeric(data$heart_disease)
+df.pca <- prcomp(data)
+pca_2 <- df.pca$x %>%
+    as.tibble %>%
+    select(PC1, PC2)
+
+pca_kmeans <- pca_2 %>%
+    kmeans(centers = 2)
+pca_kmeans$betweenss/pca_kmeans$totss##accuracy
+ggbiplot(df.pca, groups = factor(pca_kmeans$cluster), 
+         ellipse = TRUE) +
+    theme_tufte(base_size = 14) +
+    geom_point(aes(col = factor(pca_kmeans$cluster)), 
+               size = 2, alpha = 0.2) +
+    theme(legend.position = 'top') +
+    scale_color_manual(name = 'K-Means Group of Patient',
+                       values = c('#a6cee3', '#e31a1c')) +
+    ggtitle('K-Means Clustering of First Two Principal Components')
+
+
+
+```
+
+## Results
+```{r}
+accuracies = c(round(log_acc, 3), round(svm_acc, 3), round(lda_acc, 3), round(knn5_acc, 3), round(knn10_acc, 3), round(knn50_acc, 3))
+methods = c("Logistic Regression", "Line SVM", "LDA", "KNN k = 5", "KNN k = 10", "KNN k = 50")
+
+accuracy = as.data.frame(cbind(accuracies, methods))
+
+ggplot(data=accuracy, aes(x=methods, y=accuracies)) + geom_bar(stat="identity", aes(fill = methods)) + scale_x_discrete(guide = guide_axis(angle=45))+ ggtitle("Model Accuracy") + scale_fill_brewer(palette = "Spectral")
+```
+
+
+## Methods
+Rose data method - As we see the minority class number “1” is only about 4.25% of the total cases. As we can see from the output, most observations are a 1, which means the data is highly unbalanced. This will result in the accuracy score to be nearly 1, but the model performance will be very poor. The only model affected by this will be the logistic model . We ran the logistic model without any synthetic data first, and then ran it after. This will improve the performance of the logistic regression model. but won't effect for linear svm, lda,knn. 
+
+logistic regression - similar to linear regression,unlike linear regression the response variables can be categorical or continuous, as the model does not strictly require continuous data. To predict group membership, linear regression uses the log odds ratio rather than probabilities and an iterative maximum likelihood method rather than a least squares to fit the final model. 
+
+Linear SVM - a classification and regression model, it can solve linear and non-linear problems by  creates a line or a hyperplane which separates the data into classes
+LDA -  LDA is a linear classifier taht using bayesian statistic 
+KNN - a supervised learning model taht used for both classification and regression, use feature similarity to predict the cluster that the new point will fall
+PCA+kmean - show case of the unsupervise learning model performance.
+
+## Conclusion
+After carrying out the logistic regression, non-linear support vector machine, linear discriminant analysis, and K-nearest neighbors, pca+kmean we calculated the error rate to determine which model best predicts if someone is likely to have a stroke. The logistic regression with synthetic data had the highest error rate between all the models we created. The model had a 25.11%. The next model we implemented was the non-linear support vector machine. Using a radial kernel with degree = 1 and cost = 1000 and gamma = 0.01. This model was same at predicting the stroke status of a person. The error rate of the support vector machine was 25.9% and accuracy 74%  . This was one of the better models we implemented to predict the status of a person having a stroke. Linear Discriminant Analysis had a similar error rate. The linear discriminant analysis had a 26% error rate and 74% accuracy Finally, we attempted K-nearest neighbors algorithm on the data. This method gave us around the same error rate as others which is 25%, we think the best model at predicting a person's stroke status are linear svm and  logistic regression if we get acutal balanced data because we could use pca or reduction method to make it more efficient . PCA+kmean is a simple show case of how unsupervise model performance
+## Additional Analyses
+If time allowed, it would have been interesting to test more models and compare the accuracy of those classification models to the ones we tested. We could have implemented decision trees and random forest models. 
+
+More Dimension reduction method could have been implemented to reduce the number of prediction features and should've try more combination of the dataset such as PCA + kmean. 
+
+To continue our exploration with stroke data, it would be beneficial to gather real world data that is balanced between having a stroke and not having a stroke. 
+

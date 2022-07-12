@@ -1,0 +1,285 @@
+---
+title: "Stat 419 Group Project"
+author: "Molly Behrends, Payton Bokowy, Freeman Chen, Marvin Lim"
+date: "12/15/2021"
+output: pdf_document
+---
+
+# Introduction 
+
+## Dataset Information
+The dataset for this project was obtained data about strokes from kaggle.com which was collected from the World Health Organization. The dataset contains information about each person's age, heart disease, hypertension, marital status, BMI, and their smoking status to list a few of the variables. 
+
+This dataset was chosen because strokes are the second leading cause of death in the world. It would be helpful to be able to know what features can possibly lead to a stroke, so we are aware and can reduce those factors. 
+
+## Processing Problems
+When the data was loaded in, we noticed the data was highly unbalanced. Only about 5% of the data results in strokes, while the other 95% results in no stroke. This resulted in the models being fitted on unbalanced data. In order to combat this issue, we created synthetic data.
+
+# Code 
+```{r library, message=F, warning=F, echo=F}
+library(ggplot2)
+library(e1071)
+library(lmtest)
+library(MASS)
+library(class)
+library(pheatmap)
+library(ROSE)
+```
+
+## Reads in the data
+```{r data}
+data = read.csv("healthcare-dataset-stroke-data.csv") # reads data file
+data = subset(data, select = -c(id)) # gets rid of the id
+
+# changes the predictors to factors
+data$gender = as.factor(data$gender)
+data$hypertension = as.factor(data$hypertension)
+data$heart_disease = as.factor(data$heart_disease)
+data$ever_married = as.factor(data$ever_married)
+data$work_type = as.factor(data$work_type)
+data$Residence_type = as.factor(data$Residence_type)
+data$smoking_status = as.factor(data$smoking_status)
+data$stroke = as.factor(data$stroke)
+data$bmi = as.numeric(data$bmi)
+data = na.omit(data)
+
+prop.table(table(data$stroke))
+```
+
+## Splits the data into a testing and training set
+```{r split}
+set.seed(1)
+n = dim(data)[1]
+
+dt = sort(sample(n, n*.7))
+training = data[dt,]
+testing = data[-dt,]
+
+# train = seq(from = 1, to = n, by = 2)
+# training = data[train, ]
+# testing = data[-train, ]
+# 
+# training = as.data.frame(training)
+# testing = as.data.frame(testing)
+```
+
+
+```{r synthetic}
+set.seed(1)
+
+syn_train = ROSE(stroke~.,data=training)$data
+table(syn_train$stroke)
+
+syn_test = ROSE(stroke~.,data=testing)$data
+table(syn_test$stroke)
+
+num_train = syn_train
+num_test = syn_test
+
+num_train$gender = as.numeric(as.factor(num_train$gender))
+num_train$ever_married = as.numeric(as.factor(num_train$ever_married))
+num_train$work_type = as.numeric(as.factor(num_train$work_type))
+num_train$Residence_type = as.numeric(as.factor(num_train$Residence_type))
+num_train$smoking_status = as.numeric(as.factor(num_train$smoking_status))
+
+num_test$gender = as.numeric(as.factor(num_test$gender))
+num_test$ever_married = as.numeric(as.factor(num_test$ever_married))
+num_test$work_type = as.numeric(as.factor(num_test$work_type))
+num_test$Residence_type = as.numeric(as.factor(num_test$Residence_type))
+num_test$smoking_status = as.numeric(as.factor(num_test$smoking_status))
+```
+
+## Research Questions
+
+### Will smoking status of an individual increase the chance of having a stroke?
+```{r}
+n = dim(data)[1]
+past_smoked_data = data[data$smoking_status == "formerly smoked", ]
+past_smoked_prob = dim(past_smoked_data[past_smoked_data$stroke == 1, ])[1]/ n
+
+never_smoked_data = data[data$smoking_status == "never smoked", ]
+never_smoked_prob = dim(never_smoked_data[never_smoked_data$stroke == 1, ])[1]/ n
+
+smokes_data = data[data$smoking_status == "smokes", ]
+smokes_prob = dim(smokes_data[smokes_data$stroke == 1, ])[1]/ n
+
+u_smoke_data = data[data$smoking_status == "Unknown", ]
+u_smoke_prob = dim(u_smoke_data[u_smoke_data$stroke == 1, ])[1]/ n
+
+smoking_status = c("formerly smoked", "never smoked", "smokes", "unknown")
+smoking_prob = c(round(past_smoked_prob, 3), round(never_smoked_prob, 3), round(smokes_prob, 3), round(u_smoke_prob, 3))
+smoking_data = as.data.frame(cbind(smoking_status, smoking_prob))
+
+ggplot(data = smoking_data) + 
+  geom_bar(stat="identity", aes(x=smoking_status, y = smoking_prob,
+                                color=smoking_status)) + 
+  xlab("Smoking Status") + ylab("Stroke Probability") + 
+  ggtitle("Stroke Probability Given Smoking Status")
+```
+
+### What variables best classify if a patient is likely to have a stroke?
+## Correlation Visualization
+```{r}
+cor_data = data
+cor_data$gender = as.numeric(cor_data$gender)
+cor_data$hypertension = as.numeric(cor_data$hypertension)
+cor_data$heart_disease = as.numeric(cor_data$heart_disease)
+cor_data$ever_married = as.numeric(cor_data$ever_married)
+cor_data$work_type = as.numeric(cor_data$work_type)
+cor_data$Residence_type = as.numeric(cor_data$Residence_type)
+cor_data$smoking_status = as.numeric(cor_data$smoking_status)
+cor_data$stroke = as.numeric(cor_data$stroke)
+cors = cor(cor_data)
+cor_df = data.frame(as.table(cors))
+
+ggplot(data=cor_df, mapping=aes(Var1, Var2))+
+  geom_tile(mapping = aes(fill = Freq)) +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", 
+   midpoint = 0, limit = c(-1,1)) + ggtitle("Correlation Heatmap")
+```
+
+### Does marriage status affect the likelihood of having a stroke?
+```{r}
+married_data = data[data$ever_married == "Yes", ]
+married_prob = dim(married_data[never_smoked_data$stroke == 1, ])[1]/ n
+
+not_married_data = data[data$ever_married == "No", ]
+not_married_prob = dim(not_married_data[never_smoked_data$stroke == 1, ])[1]/ n
+
+marriage_status = c("Married", "Not Married")
+marriage_prob = c(round(married_prob, 3), round(not_married_prob, 3))
+
+marriage_data = as.data.frame(cbind(marriage_status, marriage_prob))
+
+ggplot(data = marriage_data) + 
+  geom_bar(stat="identity", aes(x=marriage_status, y = marriage_prob,
+                                color=marriage_status)) + 
+  xlab("Marriage Status") + ylab("Stroke Probability") + 
+  ggtitle("Stroke Probability Given Marriage Status")
+```
+
+### Do people with heart disease have a higher risk of having a stroke?
+```{r}
+no_heart_data = data[data$heart_disease == 0, ]
+no_heart_prob = dim(no_heart_data[never_smoked_data$stroke == 1, ])[1]/ n
+
+heart_data = data[data$heart_disease == 1, ]
+heart_prob = dim(heart_data[never_smoked_data$stroke == 1, ])[1]/ n
+
+heart_status = c("No Heart Disease", "Heart Disease")
+heart_prob = c(round(no_heart_prob, 3), round(heart_prob, 3))
+
+heart_data = as.data.frame(cbind(heart_status, heart_prob))
+
+ggplot(data = heart_data) + geom_bar(stat="identity", 
+                                     aes(x=heart_status, y = heart_prob, color=heart_status)) + xlab("Heart Disease History") + 
+  ylab("Stroke Probability") + 
+  ggtitle("Stroke Probability Given Heart Disease History")
+```
+
+### What classification model is best at predicting having stroke class?
+
+# Results & Analysis
+
+## Logistic Regression
+```{r}
+full_logistic = glm(stroke~., data = syn_train, family = "binomial")
+
+probs = predict(full_logistic, type = "response", syn_test)
+n = dim(syn_test)[1]
+t = 0.5
+pred.label = c()
+pred.label = rep(0, n)
+pred.label[probs>t] = 1
+table(predicted = pred.label, truth = syn_test$stroke)
+
+log_TPM = (205 + 165) / n
+log_TPM
+
+# plots the ROC Curve
+tseq = seq(0.001, 0.999, length.out = 100)
+sensitivity = c(); specificity = c()
+
+for (j in 1:length(tseq)){
+t = tseq[j]
+
+pred.label[probs>t] = 1
+pred.label[probs < t] = 0
+
+p.ind = which(syn_test$stroke == 1)
+sensitivity[j] = mean(pred.label[p.ind] == syn_test$stroke[p.ind])
+
+n.ind = which(syn_test$stroke == 0)  
+specificity[j] = mean(pred.label[n.ind] == syn_test$stroke[n.ind])
+}
+
+plot(1 - specificity, sensitivity, type = "l", xlim = c(0, 1), ylim = c(0, 1))
+abline(a = 0, b = 1)
+```
+
+## Radial SVM
+```{r svm}
+# performs radial support vector machine 
+svm.rad = tune(svm, stroke~., data = syn_train, kernel = "radial", 
+ranges = list(cost = c(0.1, 10, 1000), degree = c(1,2,3,5), 
+gamma = c(0.01,1,10)))
+
+svm.best = svm.rad$best.model
+
+# best model: cost = 1000, gamma = 0.01, degree = 1 
+svm.best = svm(stroke~., data = syn_train, kernel = "radial", 
+               cost = 1, gamma = 0.01, degree =1)
+
+# predicts on the testing set
+svm.pred = predict(svm.best, syn_test)
+table(predicted = svm.pred, truth = syn_test$stroke) # confusion matrix
+
+svm_error = (230+142) / n
+svm_error
+```
+
+## Linear Discriminant Analysis
+```{r lda}
+lda.fit = lda(stroke~., data = num_train) # performs LDA classification
+
+lda.pred = predict(lda.fit, num_test)  # predicts on the test set
+
+table(prediction = lda.pred$class, truth = num_test$stroke)  # confusion matrix
+
+lda_error = (211 + 159) / n
+lda_error
+```
+
+
+## KNN
+```{r knn}
+set.seed(1)
+
+knn5 = knn(num_train[, -11], num_test[, -11], syn_train$stroke, k=5)
+table(syn_test$stroke, knn5)
+
+TPM = (171+229) / dim(syn_test)[1]
+TPM
+
+knn10 = knn(num_train[, -11], num_test[, -11], syn_train$stroke, k=10)
+table(syn_test$stroke, knn10)
+
+TPM = (165+239) / dim(syn_test)[1]
+TPM
+
+knn50 = knn(num_train[, -11], num_test[, -11], syn_train$stroke, k=50)
+table(syn_test$stroke, knn50)
+
+TPM = (139+231) / dim(syn_test)[1]
+TPM
+```
+
+
+## Results
+
+## Methods
+
+## Conclusion
+
+## Additional Analyses
+
